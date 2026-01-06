@@ -13,7 +13,7 @@ const openai = new OpenAI({
 });
 
 interface ProgressCallback {
-  (progress: number): void;
+  (progress: number, stage: string): void;
 }
 
 export const processVideo = async (
@@ -29,21 +29,25 @@ export const processVideo = async (
 
     const video = videoResult.rows[0];
     await updateVideoStatus(videoId, 'processing');
-    onProgress?.(10);
+    onProgress?.(10, 'processing');
 
     // Step 1: Extract audio (20% progress)
+    onProgress?.(15, 'extracting_audio');
     const audioPath = await extractAudio(video.storage_url, videoId);
-    onProgress?.(20);
+    onProgress?.(20, 'audio_extracted');
 
     // Step 2: Transcribe audio (40% progress)
+    onProgress?.(25, 'transcribing');
     const transcript = await transcribeAudio(audioPath, videoId);
-    onProgress?.(40);
+    onProgress?.(40, 'transcription_complete');
 
     // Step 3: Chunk transcript into segments (60% progress)
+    onProgress?.(45, 'chunking');
     const segments = await chunkTranscript(transcript, videoId);
-    onProgress?.(60);
+    onProgress?.(60, 'chunking_complete');
 
     // Step 4: Extract insights and generate embeddings (80% progress)
+    onProgress?.(65, 'extracting_insights');
     for (let i = 0; i < segments.length; i++) {
       const segment = segments[i];
       
@@ -53,12 +57,14 @@ export const processVideo = async (
       // Generate embedding
       await generateEmbedding(segment.id, segment.segment_text);
       
-      onProgress?.(60 + Math.floor((i + 1) / segments.length) * 20);
+      const progress = 65 + Math.floor(((i + 1) / segments.length) * 20);
+      onProgress?.(progress, `processing_segment_${i + 1}_of_${segments.length}`);
     }
 
     // Step 5: Mark as completed (100% progress)
+    onProgress?.(95, 'finalizing');
     await updateVideoStatus(videoId, 'completed');
-    onProgress?.(100);
+    onProgress?.(100, 'completed');
 
     // Cleanup temporary audio file
     if (fs.existsSync(audioPath)) {

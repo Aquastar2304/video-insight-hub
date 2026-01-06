@@ -12,6 +12,7 @@ interface SearchInput {
   scope: 'video' | 'library';
   videoId?: string;
   limit?: number;
+  minSimilarity?: number;
 }
 
 interface SearchResult {
@@ -25,7 +26,14 @@ interface SearchResult {
 }
 
 export const semanticSearch = async (input: SearchInput): Promise<SearchResult[]> => {
-  const { userId, query: searchQuery, scope, videoId, limit = 20 } = input;
+  const { 
+    userId, 
+    query: searchQuery, 
+    scope, 
+    videoId, 
+    limit = 20,
+    minSimilarity = 0.5 
+  } = input;
 
   // Generate embedding for search query
   const queryEmbedding = await generateEmbedding(searchQuery);
@@ -44,9 +52,11 @@ export const semanticSearch = async (input: SearchInput): Promise<SearchResult[]
     JOIN segments s ON e.segment_id = s.id
     JOIN videos v ON s.video_id = v.id
     WHERE v.user_id = $2
+      AND v.status = 'completed'
+      AND (1 - (e.embedding <=> $1::vector)) > $3
   `;
 
-  const params: any[] = [`[${queryEmbedding.join(',')}]`, userId];
+  const params: any[] = [`[${queryEmbedding.join(',')}]`, userId, minSimilarity];
 
   // Filter by video if scope is 'video'
   if (scope === 'video' && videoId) {
@@ -54,9 +64,8 @@ export const semanticSearch = async (input: SearchInput): Promise<SearchResult[]
     params.push(videoId);
   }
 
-  // Filter by similarity threshold and order by similarity
+  // Order by similarity and limit results
   sqlQuery += `
-    AND (1 - (e.embedding <=> $1::vector)) > 0.5
     ORDER BY similarity DESC
     LIMIT $${params.length + 1}
   `;
@@ -79,7 +88,50 @@ export const semanticSearch = async (input: SearchInput): Promise<SearchResult[]
     if (error.message.includes('does not exist') || error.message.includes('relation')) {
       return [];
     }
+    console.error('Search error:', error);
     throw new AppError('Search failed', 500);
+  }
+};
+
+// Enhanced search with query expansion
+export const enhancedSearch = async (input: SearchInput): Promise<SearchResult[]> => {
+  // First, try to expand the query for better results
+  const expandedQuery = await expandQuery(input.query);
+  
+  // Perform search with expanded query
+  const results = await semanticSearch({
+    ...input,
+    query: expandedQuery,
+  });
+
+  return results;
+};
+
+// Expand search query using LLM to improve results
+const expandQuery = async (query: string): Promise<string> => {
+  try {
+    const response = await openai.chat.completions.create({
+      model: 'gpt-3.5-turbo',
+      messages: [
+        {
+          role: 'system',
+          content: 'You are a search query optimizer. Expand the user\'s search query to include synonyms and related terms that would help find relevant content. Return only the expanded query, not an explanation.',
+        },
+        {
+          role: 'user',
+          content: `Expand this search query: "${query}"`,
+        },
+      ],
+      temperature: 0.3,
+      max_tokens: 100,
+    });
+
+    const expanded = response.choices[0]?.message?.content?.trim() || query;
+    // Combine original and expanded for better coverage
+    return `${query} ${expanded}`;
+  } catch (error) {
+    console.error('Query expansion error:', error);
+    return query; // Return original if expansion fails
   }
 };
 
@@ -97,4 +149,3 @@ const generateEmbedding = async (text: string): Promise<number[]> => {
     throw new AppError('Failed to generate search embedding', 500);
   }
 };
-

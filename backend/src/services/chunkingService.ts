@@ -22,85 +22,48 @@ interface Segment {
   order_index: number;
 }
 
-// Simple chunking: split by sentences and create segments every ~5 minutes
+// Enhanced semantic chunking with topic modeling
 export const chunkTranscript = async (
   transcript: Transcript,
   videoId: string
 ): Promise<Segment[]> => {
   const { text, wordTimestamps } = transcript;
 
-  // Split into sentences
-  const sentences = text.match(/[^.!?]+[.!?]+/g) || [text];
-  
-  // Group sentences into chunks (target: ~5 minutes or 300 seconds)
-  const targetChunkDuration = 300; // 5 minutes
-  const chunks: { text: string; startTime: number; endTime: number }[] = [];
-  
-  let currentChunk = '';
-  let currentStartTime = 0;
-  let currentEndTime = 0;
-  let sentenceIndex = 0;
+  // Step 1: Use LLM to identify topic boundaries
+  const topicBoundaries = await identifyTopicBoundaries(text);
 
-  for (const sentence of sentences) {
-    // Estimate time for this sentence (rough approximation)
-    const wordCount = sentence.split(/\s+/).length;
-    const estimatedDuration = wordCount * 0.5; // ~0.5 seconds per word
-    
-    if (currentChunk && (currentEndTime - currentStartTime + estimatedDuration) > targetChunkDuration) {
-      // Save current chunk
-      chunks.push({
-        text: currentChunk.trim(),
-        startTime: currentStartTime,
-        endTime: currentEndTime,
-      });
-      
-      // Start new chunk
-      currentChunk = sentence;
-      currentStartTime = currentEndTime;
-      currentEndTime = currentStartTime + estimatedDuration;
-    } else {
-      // Add to current chunk
-      currentChunk += ' ' + sentence;
-      if (currentStartTime === 0) {
-        // Try to get actual start time from word timestamps
-        const firstWord = wordTimestamps.find((w: any) => 
-          text.indexOf(sentence) >= (w.start || 0)
-        );
-        currentStartTime = firstWord?.start || 0;
-      }
-      currentEndTime += estimatedDuration;
-    }
-    sentenceIndex++;
-  }
-
-  // Add final chunk
-  if (currentChunk) {
-    chunks.push({
-      text: currentChunk.trim(),
-      startTime: currentStartTime,
-      endTime: currentEndTime,
-    });
-  }
-
-  // Generate titles and descriptions for each chunk using LLM
+  // Step 2: Create segments based on identified boundaries
   const segments: Segment[] = [];
   
-  for (let i = 0; i < chunks.length; i++) {
-    const chunk = chunks[i];
+  for (let i = 0; i < topicBoundaries.length; i++) {
+    const boundary = topicBoundaries[i];
+    const nextBoundary = topicBoundaries[i + 1];
     
+    const startTime = getTimeForTextPosition(text, boundary.startIndex, wordTimestamps);
+    const endTime = nextBoundary 
+      ? getTimeForTextPosition(text, nextBoundary.startIndex, wordTimestamps)
+      : getTimeForTextPosition(text, text.length, wordTimestamps);
+    
+    const segmentText = text.substring(boundary.startIndex, nextBoundary?.startIndex || text.length).trim();
+    
+    if (segmentText.length < 50) {
+      // Skip very short segments
+      continue;
+    }
+
     // Generate title and description
-    const { title, description } = await generateChapterInfo(chunk.text);
+    const { title, description } = await generateChapterInfo(segmentText);
     
     const segmentId = uuidv4();
     const segment: Segment = {
       id: segmentId,
       video_id: videoId,
-      start_time: chunk.startTime,
-      end_time: chunk.endTime,
+      start_time: startTime,
+      end_time: endTime,
       title,
       description,
-      segment_text: chunk.text,
-      order_index: i,
+      segment_text: segmentText,
+      order_index: segments.length,
     };
 
     // Save to database
@@ -125,6 +88,137 @@ export const chunkTranscript = async (
   return segments;
 };
 
+// Identify topic boundaries using LLM
+interface TopicBoundary {
+  startIndex: number;
+  topic: string;
+}
+
+const identifyTopicBoundaries = async (text: string): Promise<TopicBoundary[]> => {
+  try {
+    // Split text into chunks for analysis (LLM context limits)
+    const chunkSize = 8000;
+    const chunks: string[] = [];
+    
+    for (let i = 0; i < text.length; i += chunkSize) {
+      chunks.push(text.substring(i, i + chunkSize));
+    }
+
+    const allBoundaries: TopicBoundary[] = [{ startIndex: 0, topic: 'Introduction' }];
+    let currentOffset = 0;
+
+    for (const chunk of chunks) {
+      const response = await openai.chat.completions.create({
+        model: 'gpt-3.5-turbo',
+        messages: [
+          {
+            role: 'system',
+            content: `You are analyzing a video transcript to identify where topics change. 
+Return a JSON array of objects with "position" (character index within this chunk) and "topic" (brief topic name).
+Only identify major topic shifts, not minor transitions. Aim for 3-8 topics per chunk.`,
+          },
+          {
+            role: 'user',
+            content: `Identify topic boundaries in this transcript chunk:\n\n${chunk}`,
+          },
+        ],
+        temperature: 0.3,
+        response_format: { type: 'json_object' },
+      });
+
+      const content = response.choices[0]?.message?.content || '{}';
+      const parsed = JSON.parse(content);
+      const boundaries = parsed.boundaries || parsed.topics || [];
+
+      // Convert relative positions to absolute positions
+      boundaries.forEach((boundary: any) => {
+        const absolutePosition = currentOffset + (boundary.position || boundary.index || 0);
+        if (absolutePosition > 0 && absolutePosition < text.length) {
+          allBoundaries.push({
+            startIndex: absolutePosition,
+            topic: boundary.topic || 'Topic',
+          });
+        }
+      });
+
+      currentOffset += chunk.length;
+    }
+
+    // Sort by position and remove duplicates
+    allBoundaries.sort((a, b) => a.startIndex - b.startIndex);
+    const unique: TopicBoundary[] = [];
+    let lastIndex = -1;
+    
+    for (const boundary of allBoundaries) {
+      if (boundary.startIndex > lastIndex + 200) { // At least 200 chars apart
+        unique.push(boundary);
+        lastIndex = boundary.startIndex;
+      }
+    }
+
+    return unique.length > 0 ? unique : [{ startIndex: 0, topic: 'Main Content' }];
+  } catch (error) {
+    console.error('Error identifying topic boundaries:', error);
+    // Fallback to time-based chunking
+    return fallbackChunking(text);
+  }
+};
+
+// Fallback chunking method (time-based)
+const fallbackChunking = (text: string): TopicBoundary[] => {
+  const boundaries: TopicBoundary[] = [{ startIndex: 0, topic: 'Introduction' }];
+  const targetChunkSize = 2000; // characters
+  
+  for (let i = targetChunkSize; i < text.length; i += targetChunkSize) {
+    // Find sentence boundary near target position
+    const searchStart = Math.max(0, i - 200);
+    const searchEnd = Math.min(text.length, i + 200);
+    const searchText = text.substring(searchStart, searchEnd);
+    
+    const sentenceEnd = searchText.search(/[.!?]\s+/);
+    if (sentenceEnd > 0) {
+      boundaries.push({
+        startIndex: searchStart + sentenceEnd + 1,
+        topic: 'Topic',
+      });
+    } else {
+      boundaries.push({
+        startIndex: i,
+        topic: 'Topic',
+      });
+    }
+  }
+  
+  return boundaries;
+};
+
+// Get timestamp for a text position
+const getTimeForTextPosition = (
+  fullText: string,
+  position: number,
+  wordTimestamps: any[]
+): number => {
+  if (!wordTimestamps || wordTimestamps.length === 0) {
+    // Estimate: ~150 words per minute = 0.4 seconds per word
+    const wordsBefore = fullText.substring(0, position).split(/\s+/).length;
+    return wordsBefore * 0.4;
+  }
+
+  // Find the word that contains this position
+  let charCount = 0;
+  for (const word of wordTimestamps) {
+    const wordLength = word.word?.length || 0;
+    if (charCount + wordLength >= position) {
+      return word.start || 0;
+    }
+    charCount += wordLength + 1; // +1 for space
+  }
+
+  // Fallback to last timestamp
+  const lastWord = wordTimestamps[wordTimestamps.length - 1];
+  return lastWord?.start || 0;
+};
+
 // Generate chapter title and description using LLM
 const generateChapterInfo = async (text: string): Promise<{ title: string; description: string }> => {
   try {
@@ -137,23 +231,30 @@ const generateChapterInfo = async (text: string): Promise<{ title: string; descr
         },
         {
           role: 'user',
-          content: `Given this transcript segment, create a short title (3-8 words) and a one-sentence description:\n\n${text.substring(0, 1000)}`,
+          content: `Given this transcript segment, create:
+1. A short, descriptive title (3-8 words)
+2. A one-sentence description (max 150 characters)
+
+Return as JSON: {"title": "...", "description": "..."}
+
+Transcript:\n${text.substring(0, 1500)}`,
         },
       ],
       temperature: 0.7,
-      max_tokens: 100,
+      max_tokens: 150,
+      response_format: { type: 'json_object' },
     });
 
-    const content = response.choices[0]?.message?.content || '';
-    const lines = content.split('\n').filter(l => l.trim());
+    const content = response.choices[0]?.message?.content || '{}';
+    const parsed = JSON.parse(content);
     
-    const title = lines[0]?.replace(/^Title:\s*/i, '').trim() || 'Untitled Chapter';
-    const description = lines[1]?.replace(/^Description:\s*/i, '').trim() || lines[0] || 'No description available';
-
-    return { title, description };
+    return {
+      title: parsed.title || text.split(/\s+/).slice(0, 6).join(' ') + '...',
+      description: parsed.description || text.substring(0, 150) + '...',
+    };
   } catch (error) {
     console.error('Error generating chapter info:', error);
-    // Fallback to simple title
+    // Fallback
     const words = text.split(/\s+/).slice(0, 5).join(' ');
     return {
       title: words + '...',
@@ -161,4 +262,3 @@ const generateChapterInfo = async (text: string): Promise<{ title: string; descr
     };
   }
 };
-
