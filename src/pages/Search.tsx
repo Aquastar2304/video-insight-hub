@@ -2,42 +2,15 @@ import { Header } from "@/components/layout/Header";
 import { Footer } from "@/components/layout/Footer";
 import { GlassCard } from "@/components/ui/GlassCard";
 import { motion } from "framer-motion";
-import { Search as SearchIcon, Play, Clock, Sparkles } from "lucide-react";
+import { Search as SearchIcon, Play, Clock, Sparkles, Loader2 } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { useState } from "react";
 import { Link } from "react-router-dom";
-
-const mockResults = [
-  {
-    id: "1",
-    videoTitle: "Introduction to Machine Learning",
-    chapterTitle: "What is Machine Learning?",
-    timestamp: "2:45",
-    snippet: "Machine learning is a subset of artificial intelligence that enables systems to automatically learn and improve from experience without being explicitly programmed.",
-    thumbnail: "https://images.unsplash.com/photo-1555949963-aa79dcee981c?w=400&auto=format&fit=crop&q=80",
-    relevance: 0.95,
-  },
-  {
-    id: "2",
-    videoTitle: "Introduction to Machine Learning",
-    chapterTitle: "Supervised Learning Fundamentals",
-    timestamp: "12:30",
-    snippet: "In supervised learning, the algorithm learns from labeled training data, and makes predictions based on that data. Think of it like learning with a teacher.",
-    thumbnail: "https://images.unsplash.com/photo-1555949963-aa79dcee981c?w=400&auto=format&fit=crop&q=80",
-    relevance: 0.88,
-  },
-  {
-    id: "3",
-    videoTitle: "Advanced TypeScript Patterns",
-    chapterTitle: "Type Inference Deep Dive",
-    timestamp: "8:15",
-    snippet: "TypeScript's type inference is similar to how machine learning models infer patterns - it automatically deduces types based on the context and usage patterns.",
-    thumbnail: "https://images.unsplash.com/photo-1516116216624-53e697fedbea?w=400&auto=format&fit=crop&q=80",
-    relevance: 0.72,
-  },
-];
+import { useQuery } from "@tanstack/react-query";
+import { searchApi, SearchResult } from "@/services/api/search";
+import { toast } from "sonner";
 
 const suggestedQueries = [
   "How does gradient descent work?",
@@ -46,9 +19,28 @@ const suggestedQueries = [
   "Docker container basics",
 ];
 
+// Format time helper
+const formatTime = (seconds: number): string => {
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  const secs = Math.floor(seconds % 60);
+  
+  if (hours > 0) {
+    return `${hours}:${minutes.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+  }
+  return `${minutes}:${secs.toString().padStart(2, '0')}`;
+};
+
 export default function Search() {
   const [query, setQuery] = useState("");
   const [hasSearched, setHasSearched] = useState(false);
+
+  const { data: searchResults, isLoading, error } = useQuery({
+    queryKey: ["search", query],
+    queryFn: () => searchApi.search(query, "library"),
+    enabled: hasSearched && query.trim().length > 0,
+    retry: 1,
+  });
 
   const handleSearch = (e: React.FormEvent) => {
     e.preventDefault();
@@ -61,6 +53,10 @@ export default function Search() {
     setQuery(suggested);
     setHasSearched(true);
   };
+
+  if (error) {
+    toast.error("Search failed. Please try again.");
+  }
 
   return (
     <div className="min-h-screen bg-background">
@@ -105,8 +101,16 @@ export default function Search() {
                   type="submit"
                   size="lg"
                   className="bg-primary text-primary-foreground hover:bg-primary/90 px-8"
+                  disabled={isLoading}
                 >
-                  Search
+                  {isLoading ? (
+                    <>
+                      <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                      Searching...
+                    </>
+                  ) : (
+                    "Search"
+                  )}
                 </Button>
               </GlassCard>
             </form>
@@ -135,7 +139,13 @@ export default function Search() {
                 ))}
               </div>
             </motion.div>
-          ) : (
+          ) : isLoading ? (
+            /* Loading State */
+            <div className="text-center py-12">
+              <Loader2 className="w-12 h-12 animate-spin text-primary mx-auto mb-4" />
+              <p className="text-muted-foreground">Searching your videos...</p>
+            </div>
+          ) : searchResults && searchResults.results.length > 0 ? (
             /* Search Results */
             <motion.div
               initial={{ opacity: 0 }}
@@ -143,30 +153,28 @@ export default function Search() {
               className="space-y-4"
             >
               <p className="text-sm text-muted-foreground">
-                Found {mockResults.length} results for "{query || 'machine learning'}"
+                Found {searchResults.count} result{searchResults.count !== 1 ? "s" : ""} for "{query}"
               </p>
 
-              {mockResults.map((result, index) => (
+              {searchResults.results.map((result: SearchResult, index: number) => (
                 <motion.div
-                  key={result.id}
+                  key={result.segmentId}
                   initial={{ opacity: 0, y: 20 }}
                   animate={{ opacity: 1, y: 0 }}
                   transition={{ delay: index * 0.1 }}
                 >
-                  <Link to={`/video/${result.id}`}>
-                    <GlassCard className="p-4 flex gap-4">
+                  <Link to={`/video/${result.videoId}`}>
+                    <GlassCard className="p-4 flex gap-4 hover:border-primary/50 transition-colors">
                       {/* Thumbnail */}
-                      <div className="relative w-40 aspect-video flex-shrink-0 rounded-lg overflow-hidden">
-                        <img
-                          src={result.thumbnail}
-                          alt={result.videoTitle}
-                          className="w-full h-full object-cover"
-                        />
+                      <div className="relative w-40 aspect-video flex-shrink-0 rounded-lg overflow-hidden bg-secondary">
+                        <div className="w-full h-full flex items-center justify-center">
+                          <Play className="w-8 h-8 text-muted-foreground" />
+                        </div>
                         <div className="absolute inset-0 bg-black/40 flex items-center justify-center opacity-0 hover:opacity-100 transition-opacity">
                           <Play className="w-8 h-8 text-white" />
                         </div>
                         <Badge className="absolute bottom-2 right-2 bg-black/70 text-white border-0 text-xs">
-                          {result.timestamp}
+                          {formatTime(result.timestamp)}
                         </Badge>
                       </div>
 
@@ -175,14 +183,14 @@ export default function Search() {
                         <div className="flex items-start justify-between gap-4 mb-2">
                           <div>
                             <h3 className="font-display font-semibold text-lg line-clamp-1 group-hover:text-primary transition-colors">
-                              {result.chapterTitle}
+                              {result.segmentTitle}
                             </h3>
                             <p className="text-sm text-muted-foreground flex items-center gap-2">
                               <span>{result.videoTitle}</span>
                               <span>•</span>
                               <span className="flex items-center gap-1">
                                 <Clock className="w-3 h-3" />
-                                {result.timestamp}
+                                {formatTime(result.timestamp)}
                               </span>
                             </p>
                           </div>
@@ -190,12 +198,12 @@ export default function Search() {
                             variant="outline" 
                             className="flex-shrink-0 border-primary/30 text-primary"
                           >
-                            {Math.round(result.relevance * 100)}% match
+                            {Math.round(result.similarity * 100)}% match
                           </Badge>
                         </div>
                         
                         <p className="text-sm text-muted-foreground line-clamp-2">
-                          {result.snippet}
+                          {result.segmentText}
                         </p>
                       </div>
                     </GlassCard>
@@ -203,7 +211,15 @@ export default function Search() {
                 </motion.div>
               ))}
             </motion.div>
-          )}
+          ) : hasSearched && searchResults ? (
+            /* No Results */
+            <div className="text-center py-12">
+              <p className="text-muted-foreground mb-4">No results found for "{query}"</p>
+              <p className="text-sm text-muted-foreground">
+                Try different keywords or make sure your videos have been processed.
+              </p>
+            </div>
+          ) : null}
         </div>
       </main>
 

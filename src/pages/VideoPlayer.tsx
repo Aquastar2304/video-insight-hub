@@ -10,92 +10,181 @@ import {
   Lightbulb,
   BookOpen,
   Clock,
-  Search
+  Search,
+  Loader2
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
-import { useState } from "react";
+import { useState, useEffect } from "react";
+import { useParams } from "react-router-dom";
 import { cn } from "@/lib/utils";
-
-// Mock data
-const videoData = {
-  title: "Introduction to Machine Learning",
-  duration: "1h 24m",
-  chapters: [
-    {
-      id: "1",
-      title: "What is Machine Learning?",
-      startTime: "0:00",
-      duration: "8:32",
-      insights: [
-        { type: "definition", text: "Machine learning is a subset of AI that enables systems to learn from data" },
-        { type: "key_point", text: "Three main types: supervised, unsupervised, reinforcement learning" },
-      ]
-    },
-    {
-      id: "2",
-      title: "Supervised Learning Fundamentals",
-      startTime: "8:32",
-      duration: "15:45",
-      insights: [
-        { type: "definition", text: "Supervised learning uses labeled data to train models" },
-        { type: "example", text: "Email spam classification is a classic supervised learning example" },
-        { type: "key_point", text: "Features are input variables, labels are the output we want to predict" },
-      ]
-    },
-    {
-      id: "3",
-      title: "Neural Networks Overview",
-      startTime: "24:17",
-      duration: "18:20",
-      insights: [
-        { type: "definition", text: "Neural networks are computing systems inspired by biological neurons" },
-        { type: "key_point", text: "Deep learning uses neural networks with multiple hidden layers" },
-      ]
-    },
-    {
-      id: "4",
-      title: "Training Your First Model",
-      startTime: "42:37",
-      duration: "22:14",
-      insights: [
-        { type: "key_point", text: "Split data into training, validation, and test sets" },
-        { type: "takeaway", text: "Start simple and iterate - complexity isn't always better" },
-        { type: "example", text: "Demonstrated with a linear regression model on housing prices" },
-      ]
-    },
-    {
-      id: "5",
-      title: "Model Evaluation Metrics",
-      startTime: "1:04:51",
-      duration: "12:30",
-      insights: [
-        { type: "definition", text: "Accuracy, precision, recall, and F1 score measure model performance" },
-        { type: "key_point", text: "Choose metrics based on your specific use case and costs of errors" },
-      ]
-    },
-  ]
-};
+import { useQuery } from "@tanstack/react-query";
+import { videosApi, Segment, Insight } from "@/services/api/videos";
+import { segmentsApi } from "@/services/api/segments";
+import { toast } from "sonner";
 
 const insightTypeStyles = {
   definition: "bg-blue-500/10 text-blue-400 border-blue-500/30",
-  key_point: "bg-primary/10 text-primary border-primary/30",
+  main_point: "bg-primary/10 text-primary border-primary/30",
   example: "bg-amber-500/10 text-amber-400 border-amber-500/30",
   takeaway: "bg-emerald-500/10 text-emerald-400 border-emerald-500/30",
+  qa: "bg-purple-500/10 text-purple-400 border-purple-500/30",
 };
 
 const insightTypeLabels = {
   definition: "Definition",
-  key_point: "Key Point",
+  main_point: "Key Point",
   example: "Example",
   takeaway: "Takeaway",
+  qa: "Q&A",
+};
+
+// Format time helper
+const formatTime = (seconds: number): string => {
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  const secs = Math.floor(seconds % 60);
+  
+  if (hours > 0) {
+    return `${hours}:${minutes.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+  }
+  return `${minutes}:${secs.toString().padStart(2, '0')}`;
+};
+
+// Format duration helper
+const formatDuration = (seconds?: number): string => {
+  if (!seconds) return "Unknown";
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  if (hours > 0) {
+    return `${hours}h ${minutes}m`;
+  }
+  return `${minutes}m`;
 };
 
 export default function VideoPlayer() {
+  const { id } = useParams<{ id: string }>();
   const [isPlaying, setIsPlaying] = useState(false);
-  const [activeChapter, setActiveChapter] = useState(videoData.chapters[0].id);
+  const [activeChapter, setActiveChapter] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
+  const [segmentInsights, setSegmentInsights] = useState<Record<string, Insight[]>>({});
+
+  // Fetch video data
+  const { data: video, isLoading: videoLoading } = useQuery({
+    queryKey: ["video", id],
+    queryFn: () => videosApi.getById(id!),
+    enabled: !!id,
+  });
+
+  // Fetch segments
+  const { data: segmentsData, isLoading: segmentsLoading } = useQuery({
+    queryKey: ["segments", id],
+    queryFn: () => videosApi.getSegments(id!),
+    enabled: !!id && video?.status === "completed",
+  });
+
+  const segments = segmentsData || [];
+
+  // Set active chapter to first segment when loaded
+  useEffect(() => {
+    if (segments.length > 0 && !activeChapter) {
+      setActiveChapter(segments[0].id);
+    }
+  }, [segments, activeChapter]);
+
+  // Fetch insights for active segment
+  useEffect(() => {
+    if (activeChapter) {
+      segmentsApi.getInsights(activeChapter).then((insights) => {
+        setSegmentInsights((prev) => ({
+          ...prev,
+          [activeChapter]: insights,
+        }));
+      }).catch((error) => {
+        console.error("Error fetching insights:", error);
+      });
+    }
+  }, [activeChapter]);
+
+  // Filter segments by search query
+  const filteredSegments = segments.filter((segment) =>
+    segment.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
+    segment.segment_text.toLowerCase().includes(searchQuery.toLowerCase())
+  );
+
+  if (videoLoading) {
+    return (
+      <div className="min-h-screen bg-background">
+        <Header />
+        <main className="pt-24 pb-16">
+          <div className="container px-4">
+            <div className="flex items-center justify-center min-h-[60vh]">
+              <div className="text-center">
+                <Loader2 className="w-12 h-12 animate-spin text-primary mx-auto mb-4" />
+                <p className="text-muted-foreground">Loading video...</p>
+              </div>
+            </div>
+          </div>
+        </main>
+      </div>
+    );
+  }
+
+  if (!video) {
+    return (
+      <div className="min-h-screen bg-background">
+        <Header />
+        <main className="pt-24 pb-16">
+          <div className="container px-4">
+            <div className="text-center">
+              <p className="text-muted-foreground">Video not found</p>
+            </div>
+          </div>
+        </main>
+      </div>
+    );
+  }
+
+  if (video.status === "processing" || video.status === "pending") {
+    return (
+      <div className="min-h-screen bg-background">
+        <Header />
+        <main className="pt-24 pb-16">
+          <div className="container px-4">
+            <GlassCard className="p-12 text-center">
+              <Loader2 className="w-16 h-16 animate-spin text-primary mx-auto mb-4" />
+              <h2 className="font-display text-2xl font-bold mb-2">Processing Video</h2>
+              <p className="text-muted-foreground">
+                Your video is being processed. This may take a few minutes.
+              </p>
+              <p className="text-sm text-muted-foreground mt-2">
+                Status: {video.status}
+              </p>
+            </GlassCard>
+          </div>
+        </main>
+      </div>
+    );
+  }
+
+  if (video.status === "failed") {
+    return (
+      <div className="min-h-screen bg-background">
+        <Header />
+        <main className="pt-24 pb-16">
+          <div className="container px-4">
+            <GlassCard className="p-12 text-center">
+              <h2 className="font-display text-2xl font-bold mb-2 text-destructive">Processing Failed</h2>
+              <p className="text-muted-foreground">
+                {video.error_message || "An error occurred while processing your video."}
+              </p>
+            </GlassCard>
+          </div>
+        </main>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-background">
@@ -109,17 +198,21 @@ export default function VideoPlayer() {
               {/* Video Player */}
               <GlassCard hover={false} className="overflow-hidden">
                 <div className="relative aspect-video bg-black">
-                  {/* Video Placeholder */}
-                  <img
-                    src="https://images.unsplash.com/photo-1555949963-aa79dcee981c?w=1600&auto=format&fit=crop&q=80"
-                    alt="Video thumbnail"
-                    className="w-full h-full object-cover opacity-50"
-                  />
+                  {/* Video Placeholder - In production, use actual video player */}
+                  <div className="w-full h-full flex items-center justify-center bg-secondary">
+                    <div className="text-center">
+                      <Play className="w-16 h-16 text-muted-foreground mx-auto mb-4" />
+                      <p className="text-muted-foreground">Video Player</p>
+                      <p className="text-sm text-muted-foreground mt-2">
+                        {video.storage_url}
+                      </p>
+                    </div>
+                  </div>
                   
                   {/* Play Button */}
                   <button
                     onClick={() => setIsPlaying(!isPlaying)}
-                    className="absolute inset-0 flex items-center justify-center"
+                    className="absolute inset-0 flex items-center justify-center opacity-0 hover:opacity-100 transition-opacity"
                   >
                     <motion.div
                       whileHover={{ scale: 1.1 }}
@@ -158,7 +251,9 @@ export default function VideoPlayer() {
                         <button className="text-white hover:text-primary transition-colors">
                           <Volume2 className="w-5 h-5" />
                         </button>
-                        <span className="text-white text-sm">24:17 / 1:24:21</span>
+                        <span className="text-white text-sm">
+                          {formatTime(segments[0]?.start_time || 0)} / {formatDuration(video.duration_seconds)}
+                        </span>
                       </div>
                       <button className="text-white hover:text-primary transition-colors">
                         <Maximize className="w-5 h-5" />
@@ -171,20 +266,20 @@ export default function VideoPlayer() {
               {/* Video Info */}
               <div>
                 <h1 className="font-display text-2xl font-bold mb-2">
-                  {videoData.title}
+                  {video.title}
                 </h1>
                 <div className="flex items-center gap-4 text-sm text-muted-foreground">
                   <span className="flex items-center gap-1">
                     <Clock className="w-4 h-4" />
-                    {videoData.duration}
+                    {formatDuration(video.duration_seconds)}
                   </span>
                   <span className="flex items-center gap-1">
                     <BookOpen className="w-4 h-4" />
-                    {videoData.chapters.length} chapters
+                    {segments.length} chapters
                   </span>
                   <span className="flex items-center gap-1">
                     <Lightbulb className="w-4 h-4" />
-                    {videoData.chapters.reduce((acc, ch) => acc + ch.insights.length, 0)} insights
+                    {Object.values(segmentInsights).flat().length} insights
                   </span>
                 </div>
               </div>
@@ -209,85 +304,102 @@ export default function VideoPlayer() {
                   <h2 className="font-display font-semibold">Chapters</h2>
                 </div>
                 
-                <div className="divide-y divide-border/30">
-                  {videoData.chapters.map((chapter, index) => (
-                    <motion.button
-                      key={chapter.id}
-                      onClick={() => setActiveChapter(chapter.id)}
-                      className={cn(
-                        "w-full text-left p-4 transition-colors",
-                        activeChapter === chapter.id 
-                          ? "bg-primary/10" 
-                          : "hover:bg-secondary/50"
-                      )}
-                      initial={{ opacity: 0, x: 20 }}
-                      animate={{ opacity: 1, x: 0 }}
-                      transition={{ delay: index * 0.05 }}
-                    >
-                      <div className="flex items-start gap-3">
-                        <div className={cn(
-                          "w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0 text-sm font-medium",
-                          activeChapter === chapter.id 
-                            ? "bg-primary text-primary-foreground" 
-                            : "bg-secondary text-muted-foreground"
-                        )}>
-                          {index + 1}
-                        </div>
-                        
-                        <div className="flex-1 min-w-0">
-                          <div className="flex items-center justify-between gap-2 mb-1">
-                            <h3 className={cn(
-                              "font-medium text-sm truncate",
-                              activeChapter === chapter.id && "text-primary"
-                            )}>
-                              {chapter.title}
-                            </h3>
-                            <ChevronRight className={cn(
-                              "w-4 h-4 flex-shrink-0 transition-transform",
-                              activeChapter === chapter.id && "rotate-90 text-primary"
-                            )} />
+                {segmentsLoading ? (
+                  <div className="p-8 text-center">
+                    <Loader2 className="w-6 h-6 animate-spin text-primary mx-auto mb-2" />
+                    <p className="text-sm text-muted-foreground">Loading chapters...</p>
+                  </div>
+                ) : filteredSegments.length === 0 ? (
+                  <div className="p-8 text-center">
+                    <p className="text-sm text-muted-foreground">No chapters found</p>
+                  </div>
+                ) : (
+                  <div className="divide-y divide-border/30">
+                    {filteredSegments.map((segment, index) => (
+                      <motion.button
+                        key={segment.id}
+                        onClick={() => setActiveChapter(segment.id)}
+                        className={cn(
+                          "w-full text-left p-4 transition-colors",
+                          activeChapter === segment.id 
+                            ? "bg-primary/10" 
+                            : "hover:bg-secondary/50"
+                        )}
+                        initial={{ opacity: 0, x: 20 }}
+                        animate={{ opacity: 1, x: 0 }}
+                        transition={{ delay: index * 0.05 }}
+                      >
+                        <div className="flex items-start gap-3">
+                          <div className={cn(
+                            "w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0 text-sm font-medium",
+                            activeChapter === segment.id 
+                              ? "bg-primary text-primary-foreground" 
+                              : "bg-secondary text-muted-foreground"
+                          )}>
+                            {segment.order_index + 1}
                           </div>
-                          <p className="text-xs text-muted-foreground">
-                            {chapter.startTime} • {chapter.duration}
-                          </p>
                           
-                          {/* Insights Preview */}
-                          {activeChapter === chapter.id && (
-                            <motion.div
-                              initial={{ opacity: 0, height: 0 }}
-                              animate={{ opacity: 1, height: "auto" }}
-                              exit={{ opacity: 0, height: 0 }}
-                              className="mt-3 space-y-2"
-                            >
-                              {chapter.insights.map((insight, i) => (
-                                <div
-                                  key={i}
-                                  className={cn(
-                                    "p-2 rounded-lg border text-xs",
-                                    insightTypeStyles[insight.type as keyof typeof insightTypeStyles]
-                                  )}
-                                >
-                                  <Badge 
-                                    variant="outline" 
-                                    className={cn(
-                                      "mb-1 text-[10px] px-1.5 py-0",
-                                      insightTypeStyles[insight.type as keyof typeof insightTypeStyles]
-                                    )}
-                                  >
-                                    {insightTypeLabels[insight.type as keyof typeof insightTypeLabels]}
-                                  </Badge>
-                                  <p className="text-foreground/90">
-                                    {insight.text}
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center justify-between gap-2 mb-1">
+                              <h3 className={cn(
+                                "font-medium text-sm truncate",
+                                activeChapter === segment.id && "text-primary"
+                              )}>
+                                {segment.title}
+                              </h3>
+                              <ChevronRight className={cn(
+                                "w-4 h-4 flex-shrink-0 transition-transform",
+                                activeChapter === segment.id && "rotate-90 text-primary"
+                              )} />
+                            </div>
+                            <p className="text-xs text-muted-foreground">
+                              {formatTime(segment.start_time)} • {formatTime(segment.end_time - segment.start_time)}
+                            </p>
+                            
+                            {/* Insights Preview */}
+                            {activeChapter === segment.id && (
+                              <motion.div
+                                initial={{ opacity: 0, height: 0 }}
+                                animate={{ opacity: 1, height: "auto" }}
+                                exit={{ opacity: 0, height: 0 }}
+                                className="mt-3 space-y-2"
+                              >
+                                {segmentInsights[segment.id]?.length > 0 ? (
+                                  segmentInsights[segment.id].map((insight) => (
+                                    <div
+                                      key={insight.id}
+                                      className={cn(
+                                        "p-2 rounded-lg border text-xs",
+                                        insightTypeStyles[insight.insight_type]
+                                      )}
+                                    >
+                                      <Badge 
+                                        variant="outline" 
+                                        className={cn(
+                                          "mb-1 text-[10px] px-1.5 py-0",
+                                          insightTypeStyles[insight.insight_type]
+                                        )}
+                                      >
+                                        {insightTypeLabels[insight.insight_type]}
+                                      </Badge>
+                                      <p className="text-foreground/90">
+                                        {insight.insight_text}
+                                      </p>
+                                    </div>
+                                  ))
+                                ) : (
+                                  <p className="text-xs text-muted-foreground italic">
+                                    No insights available for this chapter
                                   </p>
-                                </div>
-                              ))}
-                            </motion.div>
-                          )}
+                                )}
+                              </motion.div>
+                            )}
+                          </div>
                         </div>
-                      </div>
-                    </motion.button>
-                  ))}
-                </div>
+                      </motion.button>
+                    ))}
+                  </div>
+                )}
               </GlassCard>
             </div>
           </div>
