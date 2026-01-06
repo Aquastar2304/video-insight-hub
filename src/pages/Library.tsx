@@ -95,14 +95,39 @@ const itemVariants = {
 export default function Library() {
   const [searchQuery, setSearchQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<string | undefined>();
+  const [sortBy, setSortBy] = useState<"newest" | "oldest" | "title">("newest");
+  const [currentPage, setCurrentPage] = useState(1);
+  const pageSize = 12;
 
   const { data, isLoading, error, refetch } = useQuery({
-    queryKey: ["videos", statusFilter],
-    queryFn: () => videosApi.getAll(50, 0, statusFilter),
+    queryKey: ["videos", statusFilter, currentPage],
+    queryFn: () => videosApi.getAll(pageSize, (currentPage - 1) * pageSize, statusFilter),
     retry: 1,
   });
 
   const videos = data?.videos || [];
+  const totalPages = data?.pagination?.totalPages || 1;
+
+  // Filter and sort videos
+  const filteredVideos = videos
+    .filter((video) => {
+      if (searchQuery) {
+        const query = searchQuery.toLowerCase();
+        return video.title.toLowerCase().includes(query);
+      }
+      return true;
+    })
+    .sort((a, b) => {
+      switch (sortBy) {
+        case "oldest":
+          return new Date(a.created_at).getTime() - new Date(b.created_at).getTime();
+        case "title":
+          return a.title.localeCompare(b.title);
+        case "newest":
+        default:
+          return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
+      }
+    });
 
   // Poll for status updates on processing videos
   useEffect(() => {
@@ -130,7 +155,9 @@ export default function Library() {
             <div>
               <h1 className="font-display text-3xl font-bold mb-2">Video Library</h1>
               <p className="text-muted-foreground">
-                {isLoading ? "Loading..." : `${videos.length} video${videos.length !== 1 ? "s" : ""} in your knowledge base`}
+                {isLoading 
+                  ? "Loading..." 
+                  : `${data?.pagination?.total || filteredVideos.length} video${(data?.pagination?.total || filteredVideos.length) !== 1 ? "s" : ""} in your knowledge base`}
               </p>
             </div>
             
@@ -146,15 +173,31 @@ export default function Library() {
           <div className="flex flex-col sm:flex-row gap-4 mb-8">
             <Input
               placeholder="Search your library..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
               className="bg-secondary border-border max-w-md"
             />
             <div className="flex gap-2">
-              <Button variant="outline" size="icon" className="border-border">
-                <Filter className="w-4 h-4" />
-              </Button>
-              <Button variant="outline" size="icon" className="border-border">
-                <SortAsc className="w-4 h-4" />
-              </Button>
+              <select
+                value={statusFilter || "all"}
+                onChange={(e) => setStatusFilter(e.target.value === "all" ? undefined : e.target.value)}
+                className="px-3 py-2 rounded-md bg-secondary border border-border text-sm"
+              >
+                <option value="all">All Status</option>
+                <option value="completed">Completed</option>
+                <option value="processing">Processing</option>
+                <option value="pending">Pending</option>
+                <option value="failed">Failed</option>
+              </select>
+              <select
+                value={sortBy}
+                onChange={(e) => setSortBy(e.target.value as any)}
+                className="px-3 py-2 rounded-md bg-secondary border border-border text-sm"
+              >
+                <option value="newest">Newest First</option>
+                <option value="oldest">Oldest First</option>
+                <option value="title">Title A-Z</option>
+              </select>
             </div>
           </div>
 
@@ -163,24 +206,29 @@ export default function Library() {
             <div className="text-center py-12">
               <p className="text-muted-foreground">Loading videos...</p>
             </div>
-          ) : videos.length === 0 ? (
+          ) : filteredVideos.length === 0 ? (
             <div className="text-center py-12">
-              <p className="text-muted-foreground mb-4">No videos yet. Upload your first video to get started!</p>
-              <Link to="/upload">
-                <Button className="bg-primary text-primary-foreground">
-                  <Plus className="w-4 h-4 mr-2" />
-                  Upload Video
-                </Button>
-              </Link>
+              <p className="text-muted-foreground mb-4">
+                {searchQuery ? "No videos match your search." : "No videos yet. Upload your first video to get started!"}
+              </p>
+              {!searchQuery && (
+                <Link to="/upload">
+                  <Button className="bg-primary text-primary-foreground">
+                    <Plus className="w-4 h-4 mr-2" />
+                    Upload Video
+                  </Button>
+                </Link>
+              )}
             </div>
           ) : (
-            <motion.div
-              variants={containerVariants}
-              initial="hidden"
-              animate="visible"
-              className="grid md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6"
-            >
-              {videos.map((video: Video) => (
+            <>
+              <motion.div
+                variants={containerVariants}
+                initial="hidden"
+                animate="visible"
+                className="grid md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6"
+              >
+                {filteredVideos.map((video: Video) => (
               <motion.div key={video.id} variants={itemVariants}>
                 <Link to={`/video/${video.id}`}>
                   <GlassCard className="overflow-hidden group">
@@ -243,8 +291,32 @@ export default function Library() {
                   </GlassCard>
                 </Link>
               </motion.div>
-              ))}
-            </motion.div>
+                ))}
+              </motion.div>
+              
+              {/* Pagination */}
+              {totalPages > 1 && (
+                <div className="flex items-center justify-center gap-2 mt-8">
+                  <Button
+                    variant="outline"
+                    onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+                    disabled={currentPage === 1}
+                  >
+                    Previous
+                  </Button>
+                  <span className="text-sm text-muted-foreground">
+                    Page {currentPage} of {totalPages}
+                  </span>
+                  <Button
+                    variant="outline"
+                    onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+                    disabled={currentPage === totalPages}
+                  >
+                    Next
+                  </Button>
+                </div>
+              )}
+            </>
           )}
         </div>
       </main>

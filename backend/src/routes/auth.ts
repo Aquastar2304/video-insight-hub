@@ -4,6 +4,7 @@ import { register, login } from '../services/authService';
 import { validate } from '../middleware/validator';
 import { authenticate, AuthRequest } from '../middleware/auth';
 import { getUserById } from '../services/authService';
+import { authLimiter } from '../middleware/rateLimiter';
 
 const router = Router();
 
@@ -24,7 +25,7 @@ const loginSchema = z.object({
 });
 
 // Register new user
-router.post('/register', validate(registerSchema), async (req, res, next) => {
+router.post('/register', authLimiter, validate(registerSchema), async (req, res, next) => {
   try {
     const { user, token } = await register(req.body);
     res.status(201).json({
@@ -37,7 +38,7 @@ router.post('/register', validate(registerSchema), async (req, res, next) => {
 });
 
 // Login
-router.post('/login', validate(loginSchema), async (req, res, next) => {
+router.post('/login', authLimiter, validate(loginSchema), async (req, res, next) => {
   try {
     const { user, token } = await login(req.body);
     res.json({

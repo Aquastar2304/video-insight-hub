@@ -34,26 +34,36 @@ export const extractInsights = async (segmentId: string, segmentText: string): P
 const generateInsights = async (text: string): Promise<Insight[]> => {
   try {
     const response = await openai.chat.completions.create({
-      model: 'gpt-3.5-turbo',
+      model: 'gpt-4', // Using GPT-4 for better insight extraction
       messages: [
         {
           role: 'system',
-          content: `You are a helpful assistant that extracts key insights from video transcripts.
-Extract the following types of insights:
-- main_point: The 2-4 most important ideas or arguments
-- definition: Important terms, concepts, or principles explicitly defined
-- example: Case studies, illustrations, or demonstrations
-- takeaway: Practical advice, steps, or recommendations
+          content: `You are an expert at extracting key insights from educational video content.
+Analyze the transcript segment and extract the following types of insights:
 
-Return ONLY a JSON array of insights, each with "text" and "type" fields. Limit to 5-8 insights total.`,
+1. **main_point**: The 2-4 most important ideas, concepts, or arguments presented (required)
+2. **definition**: Important terms, concepts, principles, or methodologies explicitly defined
+3. **example**: Specific examples, case studies, demonstrations, or illustrations provided
+4. **takeaway**: Practical advice, actionable steps, recommendations, or best practices
+5. **qa**: Questions posed and their answers, or important Q&A discussions
+
+Guidelines:
+- Extract 5-10 insights total (prioritize quality over quantity)
+- Each insight should be clear, concise, and self-contained
+- Focus on information that would be valuable for someone reviewing the content
+- Avoid redundant or overlapping insights
+- If a type doesn't apply, omit it
+
+Return a JSON object with an "insights" array. Each insight must have "text" and "type" fields.`,
         },
         {
           role: 'user',
-          content: `Extract insights from this transcript segment:\n\n${text.substring(0, 2000)}`,
+          content: `Extract insights from this transcript segment:\n\n${text.substring(0, 3000)}`,
         },
       ],
-      temperature: 0.3,
+      temperature: 0.2, // Lower temperature for more consistent extraction
       response_format: { type: 'json_object' },
+      max_tokens: 1000,
     });
 
     const content = response.choices[0]?.message?.content || '{}';
@@ -62,17 +72,41 @@ Return ONLY a JSON array of insights, each with "text" and "type" fields. Limit 
     // Handle both { insights: [...] } and direct array formats
     const insightsArray = parsed.insights || parsed || [];
     
-    return insightsArray
-      .slice(0, 8)
-      .map((insight: any) => ({
-        text: insight.text || insight.insight_text || '',
-        type: insight.type || 'main_point',
-      }))
-      .filter((insight: Insight) => insight.text.length > 0);
+    // Validate and clean insights
+    const validInsights = insightsArray
+      .map((insight: any) => {
+        const text = insight.text || insight.insight_text || '';
+        const type = insight.type || 'main_point';
+        
+        // Validate type
+        const validTypes = ['main_point', 'definition', 'example', 'takeaway', 'qa'];
+        const validType = validTypes.includes(type) ? type : 'main_point';
+        
+        return {
+          text: text.trim(),
+          type: validType,
+        };
+      })
+      .filter((insight: Insight) => {
+        // Filter out empty or too short insights
+        return insight.text.length > 10 && insight.text.length < 500;
+      })
+      .slice(0, 10); // Limit to 10 insights
+
+    // Ensure at least one main point
+    if (validInsights.length === 0) {
+      // Fallback: extract first sentence as main point
+      const firstSentence = text.match(/[^.!?]+[.!?]+/)?.[0] || text.substring(0, 200);
+      return [{
+        text: firstSentence.trim(),
+        type: 'main_point' as const,
+      }];
+    }
+
+    return validInsights;
   } catch (error) {
     console.error('Error generating insights:', error);
-    // Return empty array on error
+    // Return empty array on error - insights are optional
     return [];
   }
 };
-

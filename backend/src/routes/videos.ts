@@ -10,6 +10,7 @@ import { getStorageService } from '../config/storage';
 import { AppError } from '../middleware/errorHandler';
 import { getJobStatus } from '../queue/videoQueue';
 import { getVideoSegments, getSegmentInsights } from '../services/segmentService';
+import { uploadLimiter } from '../middleware/rateLimiter';
 
 const router = Router();
 
@@ -59,6 +60,7 @@ const submitUrlSchema = z.object({
 router.post(
   '/upload',
   authenticate,
+  uploadLimiter,
   upload.single('video'),
   async (req: AuthRequest, res, next) => {
     try {

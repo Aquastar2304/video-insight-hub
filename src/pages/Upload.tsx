@@ -10,6 +10,8 @@ import { cn } from "@/lib/utils";
 import { videosApi } from "@/services/api/videos";
 import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
+import { useSocket } from "@/hooks/useSocket";
+import { useEffect } from "react";
 
 export default function Upload() {
   const navigate = useNavigate();
@@ -18,6 +20,31 @@ export default function Upload() {
   const [uploadState, setUploadState] = useState<"idle" | "uploading" | "processing" | "complete">("idle");
   const [progress, setProgress] = useState(0);
   const [uploadedVideoId, setUploadedVideoId] = useState<string | null>(null);
+
+  // Socket for real-time updates
+  useSocket(
+    (data) => {
+      if (data.videoId === uploadedVideoId) {
+        setProgress(data.progress);
+        if (data.stage === 'completed') {
+          setUploadState('complete');
+          toast.success('Video processed successfully!');
+        }
+      }
+    },
+    (data) => {
+      if (data.videoId === uploadedVideoId) {
+        setUploadState('complete');
+        toast.success('Video processed successfully!');
+      }
+    },
+    (data) => {
+      if (data.videoId === uploadedVideoId) {
+        setUploadState('idle');
+        toast.error(data.error || 'Processing failed');
+      }
+    }
+  );
 
   const handleDrag = useCallback((e: React.DragEvent) => {
     e.preventDefault();

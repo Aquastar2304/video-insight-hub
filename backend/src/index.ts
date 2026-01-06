@@ -3,9 +3,12 @@ import cors from 'cors';
 import dotenv from 'dotenv';
 import helmet from 'helmet';
 import morgan from 'morgan';
+import { createServer } from 'http';
 import { initializeDatabase } from './config/database';
 import { connectRedis } from './config/redis';
+import { initializeSocket } from './config/socket';
 import { errorHandler, notFoundHandler } from './middleware/errorHandler';
+import { apiLimiter } from './middleware/rateLimiter';
 import authRoutes from './routes/auth';
 import videoRoutes from './routes/videos';
 import searchRoutes from './routes/search';
@@ -15,7 +18,11 @@ import segmentRoutes from './routes/segments';
 dotenv.config();
 
 const app = express();
+const httpServer = createServer(app);
 const PORT = process.env.PORT || 3000;
+
+// Initialize Socket.IO
+initializeSocket(httpServer);
 
 // Security middleware
 app.use(helmet());
@@ -38,10 +45,13 @@ if (process.env.NODE_ENV === 'development') {
   app.use(morgan('dev'));
 }
 
-// Health check
+// Health check (no rate limit)
 app.get('/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
+
+// Apply general rate limiting to all API routes
+app.use('/api', apiLimiter);
 
 // API routes
 app.use('/api/auth', authRoutes);
@@ -63,10 +73,11 @@ const startServer = async () => {
     await connectRedis();
     
     // Start server
-    app.listen(PORT, () => {
+    httpServer.listen(PORT, () => {
       console.log(`🚀 Server running on port ${PORT}`);
       console.log(`📝 Environment: ${process.env.NODE_ENV || 'development'}`);
       console.log(`🌐 API: http://localhost:${PORT}/api`);
+      console.log(`🔌 WebSocket: ws://localhost:${PORT}`);
     });
   } catch (error) {
     console.error('❌ Failed to start server:', error);
