@@ -9,6 +9,7 @@ import { errorHandler, notFoundHandler } from './middleware/errorHandler';
 import authRoutes from './routes/auth';
 import videoRoutes from './routes/videos';
 import searchRoutes from './routes/search';
+import segmentRoutes from './routes/segments';
 
 // Load environment variables
 dotenv.config();
@@ -46,6 +47,7 @@ app.get('/health', (req, res) => {
 app.use('/api/auth', authRoutes);
 app.use('/api/videos', videoRoutes);
 app.use('/api/search', searchRoutes);
+app.use('/api/segments', segmentRoutes);
 
 // Error handling
 app.use(notFoundHandler);

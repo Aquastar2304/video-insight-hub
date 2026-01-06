@@ -9,6 +9,7 @@ import { createVideo, getUserVideos, getVideoById, deleteVideo, updateVideoStatu
 import { getStorageService } from '../config/storage';
 import { AppError } from '../middleware/errorHandler';
 import { getJobStatus } from '../queue/videoQueue';
+import { getVideoSegments, getSegmentInsights } from '../services/segmentService';
 
 const router = Router();
 
@@ -173,6 +174,26 @@ router.get('/:videoId', authenticate, async (req: AuthRequest, res, next) => {
   }
 });
 
+// Get video segments (chapters)
+router.get('/:videoId/segments', authenticate, async (req: AuthRequest, res, next) => {
+  try {
+    const { videoId } = req.params;
+    const userId = req.userId!;
+
+    // Verify video belongs to user
+    const video = await getVideoById(videoId, userId);
+    if (!video) {
+      throw new AppError('Video not found', 404);
+    }
+
+    const segments = await getVideoSegments(videoId);
+
+    res.json({ segments });
+  } catch (error) {
+    next(error);
+  }
+});
+
 // Get video status
 router.get('/:videoId/status', authenticate, async (req: AuthRequest, res, next) => {
   try {
@@ -213,4 +234,3 @@ router.delete('/:videoId', authenticate, async (req: AuthRequest, res, next) => 
 });
 
 export default router;
-

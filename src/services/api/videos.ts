@@ -30,6 +30,26 @@ export interface VideoStatus {
   error?: string;
 }
 
+export interface Segment {
+  id: string;
+  video_id: string;
+  start_time: number;
+  end_time: number;
+  title: string;
+  description: string;
+  segment_text: string;
+  order_index: number;
+}
+
+export interface Insight {
+  id: string;
+  segment_id: string;
+  insight_text: string;
+  insight_type: 'main_point' | 'definition' | 'example' | 'takeaway' | 'qa';
+  timestamp?: number;
+  order_index: number;
+}
+
 export const videosApi = {
   upload: async (file: File, title?: string): Promise<Video> => {
     const formData = new FormData();
@@ -79,6 +99,11 @@ export const videosApi = {
     return response.data.video;
   },
 
+  getSegments: async (videoId: string): Promise<Segment[]> => {
+    const response = await apiClient.get<{ segments: Segment[] }>(`/videos/${videoId}/segments`);
+    return response.data.segments;
+  },
+
   getStatus: async (videoId: string): Promise<VideoStatus> => {
     const response = await apiClient.get<VideoStatus>(`/videos/${videoId}/status`);
     return response.data;
@@ -88,4 +113,3 @@ export const videosApi = {
     await apiClient.delete(`/videos/${videoId}`);
   },
 };
-
