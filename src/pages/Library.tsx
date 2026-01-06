@@ -2,13 +2,44 @@ import { Header } from "@/components/layout/Header";
 import { Footer } from "@/components/layout/Footer";
 import { GlassCard } from "@/components/ui/GlassCard";
 import { motion } from "framer-motion";
-import { Play, Clock, Layers, MoreVertical, Plus, Filter, SortAsc } from "lucide-react";
+import { Play, Clock, Layers, MoreVertical, Plus, Filter, SortAsc, FileVideo } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Link } from "react-router-dom";
 import { Badge } from "@/components/ui/badge";
+import { useQuery } from "@tanstack/react-query";
+import { videosApi, Video } from "@/services/api/videos";
+import { useState, useEffect } from "react";
+import { toast } from "sonner";
 
-// Mock data for demo
+// Format duration helper
+const formatDuration = (seconds?: number): string => {
+  if (!seconds) return "Unknown";
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  if (hours > 0) {
+    return `${hours}h ${minutes}m`;
+  }
+  return `${minutes}m`;
+};
+
+// Format date helper
+const formatDate = (dateString: string): string => {
+  const date = new Date(dateString);
+  const now = new Date();
+  const diffMs = now.getTime() - date.getTime();
+  const diffMins = Math.floor(diffMs / 60000);
+  const diffHours = Math.floor(diffMs / 3600000);
+  const diffDays = Math.floor(diffMs / 86400000);
+
+  if (diffMins < 1) return "Just now";
+  if (diffMins < 60) return `${diffMins} minute${diffMins > 1 ? "s" : ""} ago`;
+  if (diffHours < 24) return `${diffHours} hour${diffHours > 1 ? "s" : ""} ago`;
+  if (diffDays < 7) return `${diffDays} day${diffDays > 1 ? "s" : ""} ago`;
+  return date.toLocaleDateString();
+};
+
+// Mock data for demo (fallback)
 const mockVideos = [
   {
     id: "1",
@@ -62,6 +93,32 @@ const itemVariants = {
 };
 
 export default function Library() {
+  const [searchQuery, setSearchQuery] = useState("");
+  const [statusFilter, setStatusFilter] = useState<string | undefined>();
+
+  const { data, isLoading, error, refetch } = useQuery({
+    queryKey: ["videos", statusFilter],
+    queryFn: () => videosApi.getAll(50, 0, statusFilter),
+    retry: 1,
+  });
+
+  const videos = data?.videos || [];
+
+  // Poll for status updates on processing videos
+  useEffect(() => {
+    const processingVideos = videos.filter(v => v.status === "processing");
+    if (processingVideos.length > 0) {
+      const interval = setInterval(() => {
+        refetch();
+      }, 5000); // Poll every 5 seconds
+      return () => clearInterval(interval);
+    }
+  }, [videos, refetch]);
+
+  if (error) {
+    toast.error("Failed to load videos");
+  }
+
   return (
     <div className="min-h-screen bg-background">
       <Header />
@@ -73,7 +130,7 @@ export default function Library() {
             <div>
               <h1 className="font-display text-3xl font-bold mb-2">Video Library</h1>
               <p className="text-muted-foreground">
-                {mockVideos.length} videos in your knowledge base
+                {isLoading ? "Loading..." : `${videos.length} video${videos.length !== 1 ? "s" : ""} in your knowledge base`}
               </p>
             </div>
             
@@ -102,23 +159,36 @@ export default function Library() {
           </div>
 
           {/* Video Grid */}
-          <motion.div
-            variants={containerVariants}
-            initial="hidden"
-            animate="visible"
-            className="grid md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6"
-          >
-            {mockVideos.map((video) => (
+          {isLoading ? (
+            <div className="text-center py-12">
+              <p className="text-muted-foreground">Loading videos...</p>
+            </div>
+          ) : videos.length === 0 ? (
+            <div className="text-center py-12">
+              <p className="text-muted-foreground mb-4">No videos yet. Upload your first video to get started!</p>
+              <Link to="/upload">
+                <Button className="bg-primary text-primary-foreground">
+                  <Plus className="w-4 h-4 mr-2" />
+                  Upload Video
+                </Button>
+              </Link>
+            </div>
+          ) : (
+            <motion.div
+              variants={containerVariants}
+              initial="hidden"
+              animate="visible"
+              className="grid md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6"
+            >
+              {videos.map((video: Video) => (
               <motion.div key={video.id} variants={itemVariants}>
                 <Link to={`/video/${video.id}`}>
                   <GlassCard className="overflow-hidden group">
                     {/* Thumbnail */}
-                    <div className="relative aspect-video overflow-hidden">
-                      <img
-                        src={video.thumbnail}
-                        alt={video.title}
-                        className="w-full h-full object-cover transition-transform duration-300 group-hover:scale-105"
-                      />
+                    <div className="relative aspect-video overflow-hidden bg-secondary">
+                        <div className="w-full h-full flex items-center justify-center">
+                          <FileVideo className="w-12 h-12 text-muted-foreground" />
+                        </div>
                       <div className="absolute inset-0 bg-gradient-to-t from-background/80 to-transparent" />
                       
                       {/* Play Button Overlay */}
@@ -136,9 +206,11 @@ export default function Library() {
                       )}
 
                       {/* Duration */}
-                      <div className="absolute bottom-3 right-3 px-2 py-1 rounded bg-background/80 text-xs font-medium">
-                        {video.duration}
-                      </div>
+                      {video.duration_seconds && (
+                        <div className="absolute bottom-3 right-3 px-2 py-1 rounded bg-background/80 text-xs font-medium">
+                          {formatDuration(video.duration_seconds)}
+                        </div>
+                      )}
                     </div>
 
                     {/* Content */}
@@ -150,12 +222,8 @@ export default function Library() {
                       <div className="flex items-center justify-between text-xs text-muted-foreground">
                         <div className="flex items-center gap-3">
                           <span className="flex items-center gap-1">
-                            <Layers className="w-3.5 h-3.5" />
-                            {video.chapters} chapters
-                          </span>
-                          <span className="flex items-center gap-1">
                             <Clock className="w-3.5 h-3.5" />
-                            {video.date}
+                            {formatDate(video.created_at)}
                           </span>
                         </div>
                         
@@ -175,8 +243,9 @@ export default function Library() {
                   </GlassCard>
                 </Link>
               </motion.div>
-            ))}
-          </motion.div>
+              ))}
+            </motion.div>
+          )}
         </div>
       </main>
 
