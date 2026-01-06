@@ -7,12 +7,17 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useState, useCallback } from "react";
 import { cn } from "@/lib/utils";
+import { videosApi } from "@/services/api/videos";
+import { useNavigate } from "react-router-dom";
+import { toast } from "sonner";
 
 export default function Upload() {
+  const navigate = useNavigate();
   const [dragActive, setDragActive] = useState(false);
   const [url, setUrl] = useState("");
   const [uploadState, setUploadState] = useState<"idle" | "uploading" | "processing" | "complete">("idle");
   const [progress, setProgress] = useState(0);
+  const [uploadedVideoId, setUploadedVideoId] = useState<string | null>(null);
 
   const handleDrag = useCallback((e: React.DragEvent) => {
     e.preventDefault();
@@ -24,20 +29,41 @@ export default function Upload() {
     }
   }, []);
 
-  const simulateUpload = () => {
-    setUploadState("uploading");
-    let prog = 0;
-    const interval = setInterval(() => {
-      prog += 10;
-      setProgress(prog);
-      if (prog >= 100) {
-        clearInterval(interval);
-        setUploadState("processing");
-        setTimeout(() => {
-          setUploadState("complete");
-        }, 2000);
-      }
-    }, 200);
+  const handleFileUpload = async (file: File) => {
+    try {
+      setUploadState("uploading");
+      setProgress(0);
+
+      // Upload file
+      const video = await videosApi.upload(file, file.name);
+      setUploadedVideoId(video.id);
+      setProgress(100);
+      setUploadState("processing");
+
+      // Poll for status
+      const checkStatus = async () => {
+        try {
+          const status = await videosApi.getStatus(video.id);
+          if (status.status === "completed") {
+            setUploadState("complete");
+            toast.success("Video processed successfully!");
+          } else if (status.status === "failed") {
+            setUploadState("idle");
+            toast.error(status.error || "Processing failed");
+          } else {
+            // Still processing, check again in 5 seconds
+            setTimeout(checkStatus, 5000);
+          }
+        } catch (error) {
+          console.error("Status check error:", error);
+        }
+      };
+
+      setTimeout(checkStatus, 2000);
+    } catch (error: any) {
+      setUploadState("idle");
+      toast.error(error.response?.data?.error?.message || "Upload failed");
+    }
   };
 
   const handleDrop = useCallback((e: React.DragEvent) => {
@@ -45,20 +71,50 @@ export default function Upload() {
     e.stopPropagation();
     setDragActive(false);
     if (e.dataTransfer.files && e.dataTransfer.files[0]) {
-      simulateUpload();
+      handleFileUpload(e.dataTransfer.files[0]);
     }
   }, []);
 
   const handleFileInput = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
-      simulateUpload();
+      handleFileUpload(e.target.files[0]);
     }
   };
 
-  const handleUrlSubmit = (e: React.FormEvent) => {
+  const handleUrlSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (url) {
-      simulateUpload();
+      try {
+        setUploadState("uploading");
+        setProgress(50);
+        const video = await videosApi.submitUrl(url);
+        setUploadedVideoId(video.id);
+        setProgress(100);
+        setUploadState("processing");
+        toast.success("Video URL submitted. Processing will begin shortly.");
+        
+        // Poll for status
+        const checkStatus = async () => {
+          try {
+            const status = await videosApi.getStatus(video.id);
+            if (status.status === "completed") {
+              setUploadState("complete");
+              toast.success("Video processed successfully!");
+            } else if (status.status === "failed") {
+              setUploadState("idle");
+              toast.error(status.error || "Processing failed");
+            } else {
+              setTimeout(checkStatus, 5000);
+            }
+          } catch (error) {
+            console.error("Status check error:", error);
+          }
+        };
+        setTimeout(checkStatus, 2000);
+      } catch (error: any) {
+        setUploadState("idle");
+        toast.error(error.response?.data?.error?.message || "Failed to submit URL");
+      }
     }
   };
 
@@ -237,7 +293,10 @@ export default function Upload() {
                         >
                           Upload Another
                         </Button>
-                        <Button className="bg-primary text-primary-foreground hover:bg-primary/90">
+                        <Button 
+                          className="bg-primary text-primary-foreground hover:bg-primary/90"
+                          onClick={() => uploadedVideoId && navigate(`/video/${uploadedVideoId}`)}
+                        >
                           View Video
                         </Button>
                       </div>
